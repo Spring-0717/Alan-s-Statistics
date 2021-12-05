@@ -1,0 +1,355 @@
+---
+title: "Original"
+author: "Alan Du"
+date: "11/29/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+#Basic setting
+
+Generation = function(N1,N2,P,rho,eta,alpha,Sign){
+  N = N1+N2
+  n = N - 2
+  seed1 = sample(1:1000,1,F)
+  seed2 = sample(1:1000,1,F)
+  X = matrix(0, nrow = N, ncol = P)
+  u2 = as.vector(rep(0,P))
+  
+  if(Sign == "Normal"){
+    #Normal case, need MASS package
+    library(MASS)
+    set.seed(seed2)
+    J = matrix(1,nrow = P,ncol = P)
+    sigma2 = (1-rho)*diag(P)+rho*J
+    
+    sigma = sigma2
+    denominator = (sum(diag(sigma%*%sigma)))^(1/2)
+    u1_1 = sqrt(denominator*eta)
+    #u1_1 = eta
+    u1 = as.vector(rep(u1_1,P))
+    
+    for (i in 1:N1) {
+      X[i,] = mvrnorm(n = 1, mu = u1, Sigma = sigma2)
+    }
+    for (i in 1:N2) {
+      X[i+N1,] = mvrnorm(n = 1, mu = u2, Sigma = sigma2)
+    }
+    X1 = X[1:N1,] 
+    X2 = X[(N1+1):N,]
+  }else if(Sign == "NNormal"){
+    #Non-normal case
+    set.seed(seed1)
+    U1 = matrix(rgamma(N1*(P+1), shape = 4, scale = 1), nrow = N1, ncol = P+1)
+    U2 = matrix(rgamma(N2*(P+1), shape = 4, scale = 1), nrow = N2, ncol = P+1)
+    sigma1 = diag(4*(1+rho^2),P,P)
+    
+    for (i in 1:P) {
+      if(i == 1) {
+        sigma1[i,i+1] = 4*rho
+      }
+      else if(i == P){
+        sigma1[i,i-1] = 4*rho
+      }
+      else{
+        sigma1[i,i+1] = 4*rho
+        sigma1[i,i-1] = 4*rho
+      }
+    }
+    #calculate u1
+    sigma = sigma1
+    denominator = (sum(diag(sigma%*%sigma)))^(1/2)
+    u1_1 = sqrt(denominator*eta)
+    u1 = as.vector(rep(u1_1,P))
+    
+    #calculate X
+    for (i in 1:N) {
+      for (j in 1:P) {
+        if (i<N1+1){
+          X[i,j] = U1[i,j]+rho*U1[i,j+1]+u1[j]
+        }
+        else{
+          X[i,j] = U2[i-N1,j]+rho*U2[i-N1,j+1]+u2[j]
+        }
+      }
+    }
+    X1 = X[1:N1,]
+    X2 = X[(N1+1):N,]
+  }else{
+    return("No data generated due to wrong signal")
+  }
+  e = eigen(sigma)
+  eigenratio = max(e$values)/min(e$values)
+  mylist = list("X" = X, "X1" = X1, "X2" = X2, "u1" = u1, "u2" = u2, "sigma" = sigma, "denominator" = denominator,"eigenratio" = eigenratio,"eta" = eta, "alpha" = alpha)
+  return(mylist)
+}
+```
+
+
+Hotelling
+```{r}
+
+Hotelling = function(N1,N2,Data){
+  X = Data$X
+  N = N1+N2
+  P = ncol(X)
+  n = N-2
+  Critical_v = 0
+  count = 0
+  
+  X1 = X[1:N1,] 
+  X2 = X[(N1+1):N,]
+  
+  u1 = apply(X1,2,mean)
+  u2 = apply(X2,2,mean)
+  
+  B = matrix(0,nrow = P,ncol = P)
+  for (i in 1:N1) {
+    B= B+ (X1[i,]-u1)%*%t((X1[i,]-u1))
+  }
+  for (i in 1:N2) {
+    B= B+ (X2[i,]-u2)%*%t((X2[i,]-u2))
+  }
+  T2 = as.numeric((N1*N2/N)*(u1-u2)%*%solve(B)%*%(u1-u2))
+  TestT = T2*(n-P+1)/P
+  PowerF_T = function(N,p,ncp,alpha){
+    n=N-2
+    prob = pf(qf((1-alpha),p,(n-p+1)),p,(n-p+1),ncp,lower.tail = F) 
+    return(prob)
+  }
+  PowerF_T(N,P,TestT,Data$alpha)
+}
+
+```
+
+Gramschmidt
+```{r}
+gramschmidt = function(x,n1) {
+  x = as.matrix(x)
+  k <- ncol(x)
+  n <- nrow(x)
+  n2 = n - n1
+  
+  # Initialize the A and Y matrices, along with the matrix B to find A
+  A <- matrix(0, n, n)
+  Y <- matrix(0, n, k)
+  B <- matrix(0, n, n)
+  
+  # Insert the first two rows of A
+  
+  A[1,] = as.vector(rep((n)^(-1/2),n))
+  nao = (n1^(-1)+n2^(-1))^(-1/2)
+  part1 = as.vector(rep(((n1)^(-1))*nao,n1))
+  part2 = as.vector(rep(-((n2)^(-1))*nao,n2))
+  A[2,1:n1] = part1
+  A[2,(n1+1):n] = part2
+  
+  # Form B
+  
+  B[1,] = A[1,]
+  B[2,] = A[2,]
+  for (i in 3:n) {
+    c = as.vector(rep(0,n))
+    c[i] = 1
+    B[i,] = c
+  }
+  
+  for (j in 3:n) {
+    v = t(B[,j])
+    for (i in 1:(j-1)) {
+      v <- v - A[i,] %*% B[,j]%*%A[i,] 
+    }      
+    A[j,] <- v/sqrt(sum(v*v))
+  }
+
+  Y = A%*%x
+  # Collect the Q and R matrices into a list and return
+  qrcomp <- list('A'=A, 'Y'=Y, "AA" = A%*%t(A))
+  return(qrcomp)
+}
+
+```
+
+Dempster
+```{r}
+
+Dempster = function(N1,N2,Data,choice){
+  
+  #Basic setting
+  X = Data$X
+  N = N1+N2
+  P = ncol(X)
+  n = N-2
+  count = 0 
+  qrcomp = gramschmidt(X,N1)
+  Y = qrcomp$Y
+  Y2 = Y%*%t(Y)
+  Falpha1 = 0
+  Falpha2 = 0
+  
+  #calculate r1
+  f1 = function(g,a,b,c) a*g^2+b*g+c
+  p1 = 0
+  p2 = 0
+  for (i in 3:N) {
+    p1 = p1 + Y[i,]%*%Y[i,]
+    p2 = p2 + log(Y[i,]%*%Y[i,])
+  }
+  p1 = p1/n
+  t = n*(log(p1)) - p2
+  a = t
+  b = 1-n
+  c = -(n+1)*(n-1)/(3*n)
+  result1 = uniroot(f1,c(0,P),extendInt = "yes", a=a,b=b,c=c,tol = 0.0001)
+  r1 = result1$root
+  
+  #calculate r2
+  angel = as.vector(rep(0,(n-1)*n/2))
+  count = 0
+  for (j in 3:(N-1)){
+    v1 = Y[j,]
+    for (i in (j+1):N) {
+      v2 = Y[i,]
+      sin <- sin(acos((v1%*%v2/(norm(as.matrix(v1), "F")*norm(as.matrix(v2),"F")))))
+      count = count + 1
+      angel[count] <- sin
+    }      
+  }
+  w = 0
+  for (i in 1:((n-1)*n/2)) {
+    w = w - 2*log(angel[i])
+  }
+  
+  f2 = function(h,a,b,c) a*h^2+b*h+c
+  a = t + w
+  b = 1-n-choose(n,2)
+  c = -(n+1)*(n-1)/(3*n)-(3/2)*choose(n,2)
+  result2 = uniroot(f2,c(0,P),extendInt = "yes", a=a,b=b,c=c,tol = 0.0001)
+  r2 = result2$root
+  
+  #Test
+  Sum = 0
+  for (i in 3:N) {
+    Sum = Sum + Y[i,]%*%Y[i,]
+  }
+  StatisticF = (Y[2,]%*%Y[2,])/(Sum/n)
+  Falpha1 = qf(1-Data$alpha, df1 = r1, df2 = n*r1)
+  Falpha2 = qf(1-Data$alpha, df1 = r2, df2 = n*r2)
+  
+  PowerF_D = function(N,r,ncp,alpha){
+    n=N-2
+    prob = pf(qf((1-alpha),r,r*n),r,r*n,ncp,lower.tail = F) 
+    return(prob)
+  }
+  
+  if(choice == 1) {
+    if(Falpha1 == 0){
+      return("Error")
+    }else{
+      PowerF_D(N,r1,StatisticF,Data$alpha)
+    }
+  } else if (choice == 2) {
+    if(Falpha2 == 0){
+      return("Error")
+    }else{
+      PowerF_D(N,r2,StatisticF,Data$alpha)
+    }
+  } else {
+    return("Error")
+  }
+}
+
+```
+
+
+Bai
+```{r}
+Bai = function(N1,N2,Data){
+  #Basic setting
+  X = Data$X
+  N = N1+N2
+  P = ncol(X)
+  n = N-2
+  Critical_v = 0
+  
+  X1 = X[1:N1,] 
+  X2 = X[(N1+1):N,]
+
+  u1 = apply(X1,2,mean)
+  u2 = apply(X2,2,mean)
+  B = matrix(0,nrow = P,ncol = P)
+  for (i in 1:N1) {
+    B= B+ (X1[i,]-u1)%*%t((X1[i,]-u1))
+  }
+  for (i in 1:N2) {
+    B= B+ (X2[i,]-u2)%*%t((X2[i,]-u2))
+  }
+  S = B/n
+  
+  M = (N1*N2/N)*(u1-u2)%*%(u1-u2) - sum(diag(S))
+  Sigma_M = (2*(N-1)*n^2/(n*N*(N-3)))*(sum(diag(S%*%S)) - ((sum(diag(S)))^2)/n)
+  Z = M/sqrt(Sigma_M)
+  Critical_v = qnorm(1-Data$alpha, mean = 0, sd = 1)
+  PowerF_B = function(N,ncp,alpha){
+    error = qnorm(1-alpha/2)
+    prob = 1-(pnorm(error-ncp) - pnorm(-error - ncp))
+    return(prob)
+  }
+  if(Critical_v == 0){
+    return("Error")
+  }else{
+    ncp = M/sum(diag(Data$sigma%*%Data$sigma))
+    PowerF_B(N,ncp,Data$alpha)
+  }
+}
+```
+
+
+```{r}
+Main = function(N1,N2,P,rho,etalist,alpha,sign){
+  count = 100
+  prob1 = as.vector(rep(0,length(etalist)))
+  prob2 = as.vector(rep(0,length(etalist)))
+  prob3 = as.vector(rep(0,length(etalist)))
+  for (i in 1:length(etalist)) { for (j in 1:count) {
+    Data = Generation(N1,N2,P,rho,etalist[i],alpha,sign) 
+    prob1[i] = prob1[i]+Hotelling(N1,N2,Data)
+    prob2[i] = prob2[i]+Dempster(N1,N2,Data,1)
+    prob3[i] = prob3[i]+Bai(N1,N2,Data)
+  }
+  prob1[i] = prob1[i]/count
+  prob2[i] = prob2[i]/count
+  prob3[i] = prob3[i]/count
+}
+  table1 = data.frame("eta"=etalist,"H" = prob1, "D" = prob2, "B" = prob3)
+  plot(table1$eta,table1$D,type = "l",ylim = c(0,1),xlab= expression(eta), ylab = "Power",lty = 2)
+  lines(table1$eta,table1$B, type = "l",lty = 3)
+  lines(table1$eta,table1$H,type = "l")
+  return(table1)
+}
+```
+
+```{r}
+par(mfrow = c(2,2))
+Main(25,20,40,0,seq(0,1.35,0.15),0.05,"Normal")
+Main(25,20,40,0.5,seq(0,1.35,0.15),0.05,"Normal")
+Main(25,20,4,0,seq(0,1.35,0.15),0.05,"Normal")
+Main(25,20,4,0.5,seq(0,1.35,0.15),0.05,"Normal")
+```
+
+
+```{r}
+par(mfrow = c(2,2))
+Main(25,20,40,0,seq(0,1.35,0.15),0.05,"NNormal")
+Main(25,20,40,0.3,seq(0,1.35,0.15),0.05,"NNormal")
+Main(25,20,40,0.6,seq(0,1.35,0.15),0.05,"NNormal")
+Main(25,20,40,0.9,seq(0,1.35,0.15),0.05,"NNormal")
+```
+
+
